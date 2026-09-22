@@ -179,9 +179,26 @@ button, input { font-family: inherit; }
   border: 1px solid var(--border);
 }
 .check-item.checked { background: var(--success-soft); border-color: var(--success); }
+.check-item.disabled { opacity: 0.5; }
 .check-item label { flex: 1; font-size: 13.5px; display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .check-item input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--success); cursor: pointer; }
+.check-item input[type="checkbox"]:disabled { cursor: not-allowed; }
 .check-item .count-badge { font-size: 11px; color: var(--text-muted); }
+
+.evidence-btn {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 7px;
+  width: 26px; height: 26px;
+  flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 0;
+}
+.evidence-btn:hover { border-color: var(--accent); color: var(--accent); }
+.evidence-btn.has { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 
 .date-input {
   border: 1px solid var(--border);
@@ -256,10 +273,17 @@ button, input { font-family: inherit; }
 .cal-day:hover { border-color: var(--accent); }
 .cal-day.outside { opacity: 0.35; }
 .cal-day.today { border-color: var(--accent); border-width: 2px; }
+.cal-day.future { opacity: 0.55; border-style: dashed; }
 .cal-day .daynum { font-size: 12px; font-weight: 600; }
 .cal-day .dots { display: flex; flex-wrap: wrap; gap: 3px; }
 .cal-day .dots .dot { width: 6px; height: 6px; }
 .cal-day.empty { visibility: hidden; cursor: default; }
+
+@keyframes cal-flash {
+  0% { box-shadow: 0 0 0 5px var(--accent-soft); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.cal-day.flash { animation: cal-flash 0.7s ease; }
 
 .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
 .legend-item { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-muted); }
@@ -284,6 +308,7 @@ button, input { font-family: inherit; }
 .settlement-head .amount { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .settlement-head .amount.pos { color: var(--success); }
 .settlement-head .amount.neg { color: var(--danger); }
+.settlement-head .amount.zero { color: var(--text-muted); }
 .settlement-row { display: flex; align-items: center; gap: 7px; font-size: 12.5px; padding: 3px 0; }
 .settlement-row .rname { flex: 1; display: flex; align-items: center; gap: 6px; }
 .settlement-row .rcount { font-variant-numeric: tabular-nums; color: var(--text-muted); }
@@ -348,13 +373,25 @@ button, input { font-family: inherit; }
 }
 .modal h3 { margin: 0 0 14px; font-size: 16px; }
 .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; font-size: 12.5px; color: var(--text-muted); }
-.field input[type="text"], .field input[type="number"] {
+.field input[type="text"], .field input[type="number"], .field input[type="url"] {
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
   border-radius: 8px;
   padding: 9px 10px;
   font-size: 13.5px;
+}
+.field input[type="file"] {
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+.evidence-preview-wrap { display: flex; flex-direction: column; gap: 8px; margin: -4px 0 14px; }
+.evidence-preview-img {
+  max-width: 100%;
+  max-height: 160px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  object-fit: cover;
 }
 .modal-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .spacer { flex: 1; }

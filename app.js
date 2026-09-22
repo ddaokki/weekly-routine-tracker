@@ -9,7 +9,7 @@
     "#84cc16", "#f97316"
   ];
   const MAX_SETTLEMENT_WEEKS = 26;
-  const DEFAULT_SETTINGS = { rewardAmount: 10000, penaltyAmount: 5000 };
+  const DEFAULT_SETTINGS = { monthlyBudget: 100000, penaltyPerMiss: 5000 };
 
   // ---------- date helpers (all dates as local YYYY-MM-DD strings) ----------
   function toKey(date) {
@@ -59,7 +59,13 @@
   }
 
   function ensureSettings(s) {
-    s.settings = Object.assign({}, DEFAULT_SETTINGS, s.settings || {});
+    const legacy = s.settings || {};
+    const monthlyBudget = typeof legacy.monthlyBudget === "number" ? legacy.monthlyBudget : DEFAULT_SETTINGS.monthlyBudget;
+    const penaltyPerMiss = typeof legacy.penaltyPerMiss === "number"
+      ? legacy.penaltyPerMiss
+      : (typeof legacy.penaltyAmount === "number" ? legacy.penaltyAmount : DEFAULT_SETTINGS.penaltyPerMiss);
+    s.settings = { monthlyBudget, penaltyPerMiss };
+    if (!s.evidence || typeof s.evidence !== "object") s.evidence = {};
     return s;
   }
 
@@ -107,8 +113,8 @@
   const settlementList = $("settlementList");
   const monthlySettlementList = $("monthlySettlementList");
   const grandTotalLabel = $("grandTotalLabel");
-  const rewardAmountInput = $("rewardAmountInput");
-  const penaltyAmountInput = $("penaltyAmountInput");
+  const monthlyBudgetInput = $("monthlyBudgetInput");
+  const penaltyPerMissInput = $("penaltyPerMissInput");
 
   const routineModal = $("routineModal");
   const routineForm = $("routineForm");
@@ -122,7 +128,18 @@
   const dayModalTitle = $("dayModalTitle");
   const dayModalList = $("dayModalList");
 
+  const evidenceModal = $("evidenceModal");
+  const evidenceForm = $("evidenceForm");
+  const evidenceLinkInput = $("evidenceLink");
+  const evidenceNoteInput = $("evidenceNote");
+  const evidenceImageInput = $("evidenceImage");
+  const evidencePreviewWrap = $("evidencePreviewWrap");
+  const evidencePreviewImg = $("evidencePreviewImg");
+  const deleteEvidenceBtn = $("deleteEvidenceBtn");
+
   let selectedColor = PALETTE[0];
+  let evidenceCtx = null;
+  let pendingEvidenceImage = null;
 
   // ---------- routine helpers ----------
   function getRoutine(id) {
@@ -152,6 +169,30 @@
       if (d >= start && d <= end && state.logs[key].includes(routineId)) count++;
     }
     return count;
+  }
+  function getEvidence(dateKey, routineId) {
+    return (state.evidence[dateKey] && state.evidence[dateKey][routineId]) || null;
+  }
+  function hasEvidence(dateKey, routineId) {
+    const e = getEvidence(dateKey, routineId);
+    return !!(e && (e.note || e.link || e.image));
+  }
+  function setEvidenceData(dateKey, routineId, data) {
+    if (!state.evidence[dateKey]) state.evidence[dateKey] = {};
+    state.evidence[dateKey][routineId] = data;
+    saveState();
+  }
+  function removeEvidenceData(dateKey, routineId) {
+    if (state.evidence[dateKey]) {
+      delete state.evidence[dateKey][routineId];
+      if (Object.keys(state.evidence[dateKey]).length === 0) delete state.evidence[dateKey];
+    }
+    saveState();
+  }
+  function evidenceButtonHtml(dateKey, routineId, checked) {
+    if (!checked) return "";
+    const has = hasEvidence(dateKey, routineId);
+    return `<button type="button" class="evidence-btn${has ? " has" : ""}" title="${has ? "증거 보기/수정" : "증거 남기기 (선택)"}">📎</button>`;
   }
   function routinesActiveDuring(dateEnd) {
     // routines created on or before the given date, not archived after that date (simplified: not archived at all, or archivedAt after dateEnd)
@@ -188,10 +229,12 @@
 
   // ---------- rendering: today/selected-date check list ----------
   function renderCheckList() {
+    checkDateInput.max = todayKey();
     checkDateInput.value = selectedCheckDate;
     checkList.innerHTML = "";
     const dateEnd = fromKey(selectedCheckDate);
-    const routines = routinesActiveDuring(dateEnd);
+    // Past/today dates: any current routine can be logged, regardless of when it was created.
+    const routines = activeRoutines();
     checkEmpty.classList.toggle("hidden", routines.length > 0);
     const weekStart = startOfWeek(dateEnd);
     const weekEnd = endOfWeek(dateEnd);
@@ -208,12 +251,15 @@
           <span class="dot" style="background:${r.color}"></span>
           <span>${escapeHtml(r.name)}</span>
         </label>
+        ${evidenceButtonHtml(selectedCheckDate, r.id, checked)}
         <span class="count-badge">이번 주 ${weekCount}/${r.weeklyTarget}</span>
       `;
       li.querySelector("input").addEventListener("change", () => {
         toggleCheck(selectedCheckDate, r.id);
         renderAll();
       });
+      const evBtn = li.querySelector(".evidence-btn");
+      if (evBtn) evBtn.addEventListener("click", () => openEvidenceModal(selectedCheckDate, r.id));
       checkList.appendChild(li);
     });
   }
@@ -277,8 +323,9 @@
       for (let i = 0; i < 7; i++) {
         const dKey = toKey(cursor);
         const outside = cursor.getMonth() !== m;
+        const isFutureDay = dKey > todayK;
         const cell = document.createElement("div");
-        cell.className = "cal-day" + (outside ? " outside" : "") + (dKey === todayK ? " today" : "");
+        cell.className = "cal-day" + (outside ? " outside" : "") + (dKey === todayK ? " today" : "") + (isFutureDay ? " future" : "");
         const dots = (state.logs[dKey] || [])
           .map((rid) => getRoutine(rid))
           .filter(Boolean)
@@ -325,6 +372,8 @@
     return { key: `${y}-${String(m + 1).padStart(2, "0")}`, label: `${y}년 ${m + 1}월` };
   }
 
+  // Each week: count how many routines MISSED their weekly target, and deduct
+  // (missed count × penaltyPerMiss) from that month's budget. No reward for completing.
   function computeWeeklySettlements() {
     if (state.routines.length === 0) return [];
     let earliest = new Date();
@@ -348,10 +397,11 @@
           const ok = count >= r.weeklyTarget;
           return { r, count, ok };
         });
-        const allOk = rows.every((row) => row.ok);
-        const amount = allOk ? state.settings.rewardAmount : -state.settings.penaltyAmount;
+        const missCount = rows.filter((row) => !row.ok).length;
+        const deduction = missCount * state.settings.penaltyPerMiss;
+        const allOk = missCount === 0;
         const mi = weekMonthInfo(wStart);
-        results.push({ weekStart: wStart, weekEnd: wEnd, rows, allOk, amount, monthKey: mi.key, monthLabel: mi.label });
+        results.push({ weekStart: wStart, weekEnd: wEnd, rows, allOk, missCount, deduction, monthKey: mi.key, monthLabel: mi.label });
       }
       weekStart = addDays(weekStart, -7);
       guard++;
@@ -377,10 +427,10 @@
       card.innerHTML = `
         <div class="settlement-head">
           <span class="range">${fmtRange(w.weekStart, w.weekEnd)}${isCurrent ? " (이번 주)" : ""}</span>
-          <span class="amount ${w.allOk ? "pos" : "neg"}">${formatMoney(w.amount)}</span>
+          <span class="amount ${w.deduction > 0 ? "neg" : "zero"}">${w.deduction > 0 ? "−" + w.deduction.toLocaleString("ko-KR") + "원" : "0원"}</span>
         </div>
         <div class="settlement-head sub">
-          <span class="badge${w.allOk ? " achieved" : ""}">${w.allOk ? "달성" : "진행중"}</span>
+          <span class="badge${w.allOk ? " achieved" : ""}">${w.allOk ? "완벽 달성" : `${w.missCount}개 미달성`}</span>
         </div>
         ${w.rows.map((row) => `
           <div class="settlement-row${row.ok ? " ok" : ""}">
@@ -404,24 +454,34 @@
     const byMonth = new Map();
     weeks.forEach((w) => {
       if (!byMonth.has(w.monthKey)) {
-        byMonth.set(w.monthKey, { label: w.monthLabel, total: 0, achievedWeeks: 0, totalWeeks: 0 });
+        byMonth.set(w.monthKey, { label: w.monthLabel, deduction: 0, achievedWeeks: 0, totalWeeks: 0 });
       }
       const m = byMonth.get(w.monthKey);
-      m.total += w.amount;
+      m.deduction += w.deduction;
       m.totalWeeks += 1;
       if (w.allOk) m.achievedWeeks += 1;
     });
     const months = [...byMonth.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
-    const grandTotal = weeks.reduce((sum, w) => sum + w.amount, 0);
-    grandTotalLabel.textContent = `누적 ${formatMoney(grandTotal)}`;
+    const budget = state.settings.monthlyBudget;
+    const grandTotal = months.reduce((sum, [, m]) => sum + (budget - m.deduction), 0);
+    grandTotalLabel.textContent = `누적 잔액 ${formatMoney(grandTotal)}`;
 
     months.forEach(([key, m], idx) => {
+      const remaining = budget - m.deduction;
       const card = document.createElement("div");
-      card.className = "settlement-card monthly" + (m.total >= 0 ? " achieved" : "");
+      card.className = "settlement-card monthly" + (remaining >= 0 ? " achieved" : "");
       card.innerHTML = `
         <div class="settlement-head">
           <span class="range">${m.label}${idx === 0 ? " (이번 달)" : ""}</span>
-          <span class="amount ${m.total >= 0 ? "pos" : "neg"}">${formatMoney(m.total)}</span>
+          <span class="amount ${remaining >= 0 ? "pos" : "neg"}">${formatMoney(remaining)}</span>
+        </div>
+        <div class="settlement-row">
+          <span class="rname">예산</span>
+          <span class="rcount">${budget.toLocaleString("ko-KR")}원</span>
+        </div>
+        <div class="settlement-row">
+          <span class="rname">차감</span>
+          <span class="rcount">−${m.deduction.toLocaleString("ko-KR")}원</span>
         </div>
         <div class="settlement-row">
           <span class="rname">목표 달성한 주</span>
@@ -433,21 +493,21 @@
   }
 
   function setSettingsInputs() {
-    rewardAmountInput.value = state.settings.rewardAmount;
-    penaltyAmountInput.value = state.settings.penaltyAmount;
+    monthlyBudgetInput.value = state.settings.monthlyBudget;
+    penaltyPerMissInput.value = state.settings.penaltyPerMiss;
   }
 
   function handleSettingsChange() {
-    const reward = Math.max(0, parseInt(rewardAmountInput.value, 10) || 0);
-    const penalty = Math.max(0, parseInt(penaltyAmountInput.value, 10) || 0);
-    state.settings.rewardAmount = reward;
-    state.settings.penaltyAmount = penalty;
+    const budget = Math.max(0, parseInt(monthlyBudgetInput.value, 10) || 0);
+    const penalty = Math.max(0, parseInt(penaltyPerMissInput.value, 10) || 0);
+    state.settings.monthlyBudget = budget;
+    state.settings.penaltyPerMiss = penalty;
     saveState();
     renderSettlement();
     renderMonthlySettlement();
   }
-  rewardAmountInput.addEventListener("change", handleSettingsChange);
-  penaltyAmountInput.addEventListener("change", handleSettingsChange);
+  monthlyBudgetInput.addEventListener("change", handleSettingsChange);
+  penaltyPerMissInput.addEventListener("change", handleSettingsChange);
 
   function renderAll() {
     renderRoutines();
@@ -459,32 +519,48 @@
   }
 
   // ---------- day modal ----------
+  function dayModalIsOpen() {
+    return !dayModal.classList.contains("hidden");
+  }
   function openDayModal(dateKey) {
     dayModalDate = dateKey;
     const d = fromKey(dateKey);
+    const isFuture = dateKey > todayKey();
     dayModalTitle.textContent = d.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "short" });
     dayModalList.innerHTML = "";
-    const routines = routinesActiveDuring(d);
+    // Any currently active routine can be checked/edited for a past or today date.
+    const routines = activeRoutines();
     if (routines.length === 0) {
-      dayModalList.innerHTML = `<p class="empty-hint">이 날짜에는 활성화된 루틴이 없어요.</p>`;
+      dayModalList.innerHTML = `<p class="empty-hint">등록된 루틴이 없어요.</p>`;
     } else {
+      if (isFuture) {
+        const note = document.createElement("p");
+        note.className = "empty-hint";
+        note.textContent = "미래 날짜는 아직 체크할 수 없어요.";
+        dayModalList.appendChild(note);
+      }
       routines.forEach((r) => {
         const checked = isCheckedOn(dateKey, r.id);
         const li = document.createElement("li");
-        li.className = "check-item" + (checked ? " checked" : "");
+        li.className = "check-item" + (checked ? " checked" : "") + (isFuture ? " disabled" : "");
         const cbId = `day-chk-${r.id}`;
         li.innerHTML = `
           <label for="${cbId}">
-            <input type="checkbox" id="${cbId}" ${checked ? "checked" : ""} />
+            <input type="checkbox" id="${cbId}" ${checked ? "checked" : ""} ${isFuture ? "disabled" : ""} />
             <span class="dot" style="background:${r.color}"></span>
             <span>${escapeHtml(r.name)}</span>
           </label>
+          ${evidenceButtonHtml(dateKey, r.id, checked && !isFuture)}
         `;
-        li.querySelector("input").addEventListener("change", () => {
-          toggleCheck(dateKey, r.id);
-          renderAll();
-          openDayModal(dateKey);
-        });
+        if (!isFuture) {
+          li.querySelector("input").addEventListener("change", () => {
+            toggleCheck(dateKey, r.id);
+            renderAll();
+            openDayModal(dateKey);
+          });
+          const evBtn = li.querySelector(".evidence-btn");
+          if (evBtn) evBtn.addEventListener("click", () => openEvidenceModal(dateKey, r.id));
+        }
         dayModalList.appendChild(li);
       });
     }
@@ -594,7 +670,13 @@
 
   // ---------- date nav ----------
   checkDateInput.addEventListener("change", () => {
-    selectedCheckDate = checkDateInput.value || todayKey();
+    let val = checkDateInput.value || todayKey();
+    if (val > todayKey()) {
+      val = todayKey();
+      checkDateInput.value = val;
+      showToast("미래 날짜는 아직 체크할 수 없어요");
+    }
+    selectedCheckDate = val;
     renderCheckList();
   });
 
@@ -608,7 +690,120 @@
   });
   $("todayBtn").addEventListener("click", () => {
     calendarCursor = startOfMonth(new Date());
+    selectedCheckDate = todayKey();
     renderCalendar();
+    renderCheckList();
+    const todayCell = document.querySelector(".cal-day.today");
+    if (todayCell) {
+      todayCell.classList.add("flash");
+      setTimeout(() => todayCell.classList.remove("flash"), 700);
+    }
+  });
+
+  // ---------- evidence modal ----------
+  function updateEvidencePreview() {
+    if (pendingEvidenceImage) {
+      evidencePreviewImg.src = pendingEvidenceImage;
+      evidencePreviewWrap.classList.remove("hidden");
+    } else {
+      evidencePreviewWrap.classList.add("hidden");
+      evidencePreviewImg.src = "";
+    }
+  }
+  function resizeImageFile(file, maxDim, quality) {
+    maxDim = maxDim || 640;
+    quality = quality || 0.72;
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+          let width = img.width;
+          let height = img.height;
+          if (width > maxDim || height > maxDim) {
+            if (width >= height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL("image/jpeg", quality));
+        };
+        img.onerror = reject;
+        img.src = reader.result;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+  function openEvidenceModal(dateKey, routineId) {
+    evidenceCtx = { dateKey, routineId };
+    const e = getEvidence(dateKey, routineId) || {};
+    evidenceLinkInput.value = e.link || "";
+    evidenceNoteInput.value = e.note || "";
+    evidenceImageInput.value = "";
+    pendingEvidenceImage = e.image || null;
+    updateEvidencePreview();
+    deleteEvidenceBtn.classList.toggle("hidden", !hasEvidence(dateKey, routineId));
+    evidenceModal.classList.remove("hidden");
+  }
+  function closeEvidenceModal() {
+    evidenceModal.classList.add("hidden");
+    evidenceCtx = null;
+    pendingEvidenceImage = null;
+    evidenceImageInput.value = "";
+  }
+  evidenceImageInput.addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      pendingEvidenceImage = await resizeImageFile(file);
+      updateEvidencePreview();
+    } catch (err) {
+      showToast("이미지를 불러오지 못했어요");
+    }
+  });
+  $("removeEvidenceImageBtn").addEventListener("click", () => {
+    pendingEvidenceImage = null;
+    updateEvidencePreview();
+  });
+  $("cancelEvidenceBtn").addEventListener("click", closeEvidenceModal);
+  evidenceModal.addEventListener("click", (e) => {
+    if (e.target === evidenceModal) closeEvidenceModal();
+  });
+  evidenceForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (!evidenceCtx) return;
+    const { dateKey, routineId } = evidenceCtx;
+    const link = evidenceLinkInput.value.trim();
+    const note = evidenceNoteInput.value.trim();
+    if (!link && !note && !pendingEvidenceImage) {
+      removeEvidenceData(dateKey, routineId);
+    } else {
+      setEvidenceData(dateKey, routineId, { link, note, image: pendingEvidenceImage, updatedAt: new Date().toISOString() });
+    }
+    const wasDayModalOpen = dayModalIsOpen();
+    closeEvidenceModal();
+    renderAll();
+    if (wasDayModalOpen) openDayModal(dateKey);
+    showToast("저장했어요");
+  });
+  deleteEvidenceBtn.addEventListener("click", () => {
+    if (!evidenceCtx) return;
+    const { dateKey, routineId } = evidenceCtx;
+    removeEvidenceData(dateKey, routineId);
+    const wasDayModalOpen = dayModalIsOpen();
+    closeEvidenceModal();
+    renderAll();
+    if (wasDayModalOpen) openDayModal(dateKey);
+    showToast("증거를 삭제했어요");
   });
 
   // ---------- theme ----------
