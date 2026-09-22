@@ -70,13 +70,45 @@
         </div>
       </section>
 
-      <!-- Right column: weekly settlement -->
+      <!-- Right column: settlement -->
       <section class="col col-right">
+        <div class="card">
+          <div class="card-head">
+            <h2>정산 설정</h2>
+          </div>
+          <div class="settlement-settings">
+            <label class="field inline">
+              <span>주간 목표 다 채우면</span>
+              <div class="money-input reward">
+                <span class="sign">+</span>
+                <input type="number" id="rewardAmountInput" min="0" step="1000" />
+                <span class="unit">원</span>
+              </div>
+            </label>
+            <label class="field inline">
+              <span>주간 목표 못 채우면</span>
+              <div class="money-input penalty">
+                <span class="sign">−</span>
+                <input type="number" id="penaltyAmountInput" min="0" step="1000" />
+                <span class="unit">원</span>
+              </div>
+            </label>
+          </div>
+        </div>
+
         <div class="card">
           <div class="card-head">
             <h2>주간 정산</h2>
           </div>
           <div id="settlementList" class="settlement-list"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>월간 정산</h2>
+            <span id="grandTotalLabel" class="muted"></span>
+          </div>
+          <div id="monthlySettlementList" class="monthly-list"></div>
         </div>
       </section>
     </main>

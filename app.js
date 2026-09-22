@@ -9,6 +9,7 @@
     "#84cc16", "#f97316"
   ];
   const MAX_SETTLEMENT_WEEKS = 26;
+  const DEFAULT_SETTINGS = { rewardAmount: 10000, penaltyAmount: 5000 };
 
   // ---------- date helpers (all dates as local YYYY-MM-DD strings) ----------
   function toKey(date) {
@@ -57,19 +58,24 @@
     return new Date(d.getFullYear(), d.getMonth(), 1);
   }
 
+  function ensureSettings(s) {
+    s.settings = Object.assign({}, DEFAULT_SETTINGS, s.settings || {});
+    return s;
+  }
+
   function loadState() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && Array.isArray(parsed.routines) && typeof parsed.logs === "object") {
-          return parsed;
+          return ensureSettings(parsed);
         }
       }
     } catch (e) {
       console.warn("failed to load state", e);
     }
-    return { routines: [], logs: {} };
+    return ensureSettings({ routines: [], logs: {} });
   }
 
   function saveState() {
@@ -99,6 +105,10 @@
   const calendarTitle = $("calendarTitle");
   const calendarLegend = $("calendarLegend");
   const settlementList = $("settlementList");
+  const monthlySettlementList = $("monthlySettlementList");
+  const grandTotalLabel = $("grandTotalLabel");
+  const rewardAmountInput = $("rewardAmountInput");
+  const penaltyAmountInput = $("penaltyAmountInput");
 
   const routineModal = $("routineModal");
   const routineForm = $("routineForm");
@@ -300,14 +310,23 @@
     });
   }
 
-  // ---------- rendering: settlement ----------
-  function renderSettlement() {
-    settlementList.innerHTML = "";
-    if (state.routines.length === 0) {
-      settlementList.innerHTML = `<p class="settlement-empty">루틴을 추가하면 주간 정산이 여기에 표시돼요.</p>`;
-      return;
-    }
-    // earliest date to consider: earliest routine createdAt, else today
+  // ---------- settlement (weekly + monthly, with reward/penalty) ----------
+  function formatMoney(n) {
+    const sign = n < 0 ? "−" : "+";
+    return `${sign}${Math.abs(n).toLocaleString("ko-KR")}원`;
+  }
+
+  // A week "belongs" to the month containing its Thursday (ISO-week style rule),
+  // so a week that spans two months isn't split arbitrarily.
+  function weekMonthInfo(weekStart) {
+    const anchor = addDays(weekStart, 3);
+    const y = anchor.getFullYear();
+    const m = anchor.getMonth();
+    return { key: `${y}-${String(m + 1).padStart(2, "0")}`, label: `${y}년 ${m + 1}월` };
+  }
+
+  function computeWeeklySettlements() {
+    if (state.routines.length === 0) return [];
     let earliest = new Date();
     state.routines.forEach((r) => {
       if (r.createdAt) {
@@ -316,40 +335,54 @@
       }
     });
     const earliestWeekStart = startOfWeek(earliest);
-    const now = new Date();
-    let weekStart = startOfWeek(now);
-    const weeks = [];
+    let weekStart = startOfWeek(new Date());
+    const results = [];
     let guard = 0;
     while (weekStart >= earliestWeekStart && guard < MAX_SETTLEMENT_WEEKS) {
-      weeks.push(new Date(weekStart));
+      const wStart = new Date(weekStart);
+      const wEnd = addDays(wStart, 6);
+      const routines = routinesActiveDuring(wEnd);
+      if (routines.length > 0) {
+        const rows = routines.map((r) => {
+          const count = countInRange(r.id, wStart, wEnd);
+          const ok = count >= r.weeklyTarget;
+          return { r, count, ok };
+        });
+        const allOk = rows.every((row) => row.ok);
+        const amount = allOk ? state.settings.rewardAmount : -state.settings.penaltyAmount;
+        const mi = weekMonthInfo(wStart);
+        results.push({ weekStart: wStart, weekEnd: wEnd, rows, allOk, amount, monthKey: mi.key, monthLabel: mi.label });
+      }
       weekStart = addDays(weekStart, -7);
       guard++;
     }
+    return results;
+  }
 
+  function renderSettlement() {
+    settlementList.innerHTML = "";
+    if (state.routines.length === 0) {
+      settlementList.innerHTML = `<p class="settlement-empty">루틴을 추가하면 주간 정산이 여기에 표시돼요.</p>`;
+      return;
+    }
+    const weeks = computeWeeklySettlements();
     if (weeks.length === 0) {
       settlementList.innerHTML = `<p class="settlement-empty">아직 정산할 주가 없어요.</p>`;
       return;
     }
-
-    weeks.forEach((wStart, idx) => {
-      const wEnd = addDays(wStart, 6);
-      const routines = routinesActiveDuring(wEnd);
-      if (routines.length === 0) return;
-      const rows = routines.map((r) => {
-        const count = countInRange(r.id, wStart, wEnd);
-        const ok = count >= r.weeklyTarget;
-        return { r, count, ok };
-      });
-      const allOk = rows.every((row) => row.ok);
-      const card = document.createElement("div");
-      card.className = "settlement-card" + (allOk ? " achieved" : "");
+    weeks.forEach((w, idx) => {
       const isCurrent = idx === 0;
+      const card = document.createElement("div");
+      card.className = "settlement-card" + (w.allOk ? " achieved" : "");
       card.innerHTML = `
         <div class="settlement-head">
-          <span class="range">${fmtRange(wStart, wEnd)}${isCurrent ? " (이번 주)" : ""}</span>
-          <span class="badge${allOk ? " achieved" : ""}">${allOk ? "달성" : "진행중"}</span>
+          <span class="range">${fmtRange(w.weekStart, w.weekEnd)}${isCurrent ? " (이번 주)" : ""}</span>
+          <span class="amount ${w.allOk ? "pos" : "neg"}">${formatMoney(w.amount)}</span>
         </div>
-        ${rows.map((row) => `
+        <div class="settlement-head sub">
+          <span class="badge${w.allOk ? " achieved" : ""}">${w.allOk ? "달성" : "진행중"}</span>
+        </div>
+        ${w.rows.map((row) => `
           <div class="settlement-row${row.ok ? " ok" : ""}">
             <span class="rname"><span class="dot" style="background:${row.r.color}"></span>${escapeHtml(row.r.name)}</span>
             <span class="rcount">${row.count}/${row.r.weeklyTarget}${row.ok ? " ✓" : ""}</span>
@@ -360,12 +393,69 @@
     });
   }
 
+  function renderMonthlySettlement() {
+    monthlySettlementList.innerHTML = "";
+    const weeks = computeWeeklySettlements();
+    if (weeks.length === 0) {
+      monthlySettlementList.innerHTML = `<p class="settlement-empty">아직 정산할 달이 없어요.</p>`;
+      grandTotalLabel.textContent = "";
+      return;
+    }
+    const byMonth = new Map();
+    weeks.forEach((w) => {
+      if (!byMonth.has(w.monthKey)) {
+        byMonth.set(w.monthKey, { label: w.monthLabel, total: 0, achievedWeeks: 0, totalWeeks: 0 });
+      }
+      const m = byMonth.get(w.monthKey);
+      m.total += w.amount;
+      m.totalWeeks += 1;
+      if (w.allOk) m.achievedWeeks += 1;
+    });
+    const months = [...byMonth.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
+    const grandTotal = weeks.reduce((sum, w) => sum + w.amount, 0);
+    grandTotalLabel.textContent = `누적 ${formatMoney(grandTotal)}`;
+
+    months.forEach(([key, m], idx) => {
+      const card = document.createElement("div");
+      card.className = "settlement-card monthly" + (m.total >= 0 ? " achieved" : "");
+      card.innerHTML = `
+        <div class="settlement-head">
+          <span class="range">${m.label}${idx === 0 ? " (이번 달)" : ""}</span>
+          <span class="amount ${m.total >= 0 ? "pos" : "neg"}">${formatMoney(m.total)}</span>
+        </div>
+        <div class="settlement-row">
+          <span class="rname">목표 달성한 주</span>
+          <span class="rcount">${m.achievedWeeks}/${m.totalWeeks}주</span>
+        </div>
+      `;
+      monthlySettlementList.appendChild(card);
+    });
+  }
+
+  function setSettingsInputs() {
+    rewardAmountInput.value = state.settings.rewardAmount;
+    penaltyAmountInput.value = state.settings.penaltyAmount;
+  }
+
+  function handleSettingsChange() {
+    const reward = Math.max(0, parseInt(rewardAmountInput.value, 10) || 0);
+    const penalty = Math.max(0, parseInt(penaltyAmountInput.value, 10) || 0);
+    state.settings.rewardAmount = reward;
+    state.settings.penaltyAmount = penalty;
+    saveState();
+    renderSettlement();
+    renderMonthlySettlement();
+  }
+  rewardAmountInput.addEventListener("change", handleSettingsChange);
+  penaltyAmountInput.addEventListener("change", handleSettingsChange);
+
   function renderAll() {
     renderRoutines();
     renderCheckList();
     renderWeekProgress();
     renderCalendar();
     renderSettlement();
+    renderMonthlySettlement();
   }
 
   // ---------- day modal ----------
@@ -569,8 +659,9 @@
         if (!parsed || !Array.isArray(parsed.routines) || typeof parsed.logs !== "object") {
           throw new Error("invalid format");
         }
-        state = parsed;
+        state = ensureSettings(parsed);
         saveState();
+        setSettingsInputs();
         renderAll();
         showToast("백업을 불러왔어요");
       } catch (err) {
@@ -598,5 +689,6 @@
 
   // ---------- init ----------
   initTheme();
+  setSettingsInputs();
   renderAll();
 })();
