@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>주간 루틴 트래커</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-icon">✓</span>
+        <h1>주간 루틴 트래커</h1>
+      </div>
+      <div class="topbar-actions">
+        <button id="themeToggle" class="icon-btn" title="테마 전환">🌙</button>
+        <button id="exportBtn" class="ghost-btn" title="백업 파일로 내보내기">내보내기</button>
+        <label class="ghost-btn file-label" title="백업 파일 불러오기">
+          가져오기
+          <input type="file" id="importInput" accept="application/json" hidden />
+        </label>
+      </div>
+    </header>
+
+    <main class="layout">
+      <!-- Left column: routines + today check -->
+      <section class="col col-left">
+        <div class="card">
+          <div class="card-head">
+            <h2>루틴</h2>
+            <button id="addRoutineBtn" class="primary-btn">+ 루틴 추가</button>
+          </div>
+          <ul id="routineList" class="routine-list"></ul>
+          <p id="routineEmpty" class="empty-hint">아직 등록된 루틴이 없어요. 위 버튼으로 추가해보세요.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>체크하기</h2>
+            <input type="date" id="checkDate" class="date-input" />
+          </div>
+          <ul id="checkList" class="check-list"></ul>
+          <p id="checkEmpty" class="empty-hint">체크할 루틴이 없어요.</p>
+        </div>
+      </section>
+
+      <!-- Middle column: this week progress + calendar -->
+      <section class="col col-mid">
+        <div class="card">
+          <div class="card-head">
+            <h2>이번 주 진행 상황</h2>
+            <span id="weekRangeLabel" class="muted"></span>
+          </div>
+          <ul id="weekProgressList" class="progress-list"></ul>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2 id="calendarTitle">캘린더</h2>
+            <div class="calendar-nav">
+              <button id="prevMonthBtn" class="icon-btn">‹</button>
+              <button id="todayBtn" class="ghost-btn small">오늘</button>
+              <button id="nextMonthBtn" class="icon-btn">›</button>
+            </div>
+          </div>
+          <div class="calendar-weekday-row" id="calendarWeekdayRow"></div>
+          <div class="calendar-grid" id="calendarGrid"></div>
+          <div class="legend" id="calendarLegend"></div>
+        </div>
+      </section>
+
+      <!-- Right column: weekly settlement -->
+      <section class="col col-right">
+        <div class="card">
+          <div class="card-head">
+            <h2>주간 정산</h2>
+          </div>
+          <div id="settlementList" class="settlement-list"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Routine add/edit modal -->
+  <div id="routineModal" class="modal-backdrop hidden">
+    <div class="modal">
+      <h3 id="modalTitle">루틴 추가</h3>
+      <form id="routineForm">
+        <label class="field">
+          <span>루틴 이름</span>
+          <input type="text" id="routineName" placeholder="예: 10km 러닝" maxlength="40" required />
+        </label>
+        <label class="field">
+          <span>주간 목표 횟수</span>
+          <input type="number" id="routineTarget" min="1" max="14" value="3" required />
+        </label>
+        <label class="field">
+          <span>색상</span>
+          <div class="color-picker" id="colorPicker"></div>
+        </label>
+        <div class="modal-actions">
+          <button type="button" id="deleteRoutineBtn" class="danger-btn hidden">삭제</button>
+          <div class="spacer"></div>
+          <button type="button" id="cancelModalBtn" class="ghost-btn">취소</button>
+          <button type="submit" class="primary-btn">저장</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Day detail modal (from calendar) -->
+  <div id="dayModal" class="modal-backdrop hidden">
+    <div class="modal">
+      <h3 id="dayModalTitle">날짜</h3>
+      <ul id="dayModalList" class="check-list"></ul>
+      <div class="modal-actions">
+        <div class="spacer"></div>
+        <button type="button" id="closeDayModalBtn" class="primary-btn">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
